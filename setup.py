@@ -13,9 +13,12 @@ long_description = None
 
 setup(
     name="ca2spike",
-    version="0.1.0",
+    version="0.1.1",
     requires=["numpy", "uifunc"],
     packages=["ca2spike"],
+    package_data={
+        'ca2spike': ["data/*.h5"]
+    },
     entry_points={
         "gui_scripts": [
             "ca2spike=ca2spike.main:convert"

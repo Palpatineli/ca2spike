@@ -9,7 +9,8 @@ from .convi import pearson_corr
 MODEL_FREQ = 100  # see https://github.com/codeneuro/spikefinder-datasets/issues/1
 
 def load_model() -> Model:
-    return _load_model(resource_filename(Requirement.parse("ca2spike"), "data/model_{}.h5".format(K.backend())),
+    return _load_model(resource_filename(Requirement.parse("ca2spike"),
+                                         "ca2spike/data/model_{}.h5".format(K.backend())),
                        custom_objects={"_pearson_corr": pearson_corr})
 
 def _resample(series: np.ndarray, source_freq: float, target_freq: float, axis: int = -1) -> np.ndarray:
