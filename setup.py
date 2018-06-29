@@ -9,11 +9,13 @@ try:  # Try to create an rst long_description from README.md
 except Exception as error:
     print("README.md conversion to reStructuredText failed. Error:\n",
           error, "Setting long_description to None.")
-long_description = None
+    long_description = None
 
 setup(
     name="ca2spike",
-    version="0.1.1",
+    version="0.1.3",
+    author="Keji Li",
+    author_email="user@keji.li",
     requires=["numpy", "uifunc"],
     packages=["ca2spike"],
     package_data={
