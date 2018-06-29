@@ -70,7 +70,7 @@ def prep_data(data: Data, focus_1st_n: int = 0) -> Dict[str, np.ndarray]:
 def prep_data_one(data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     data[np.isnan(data)] = TRACE_FILL["calcium"]
     id_train = np.full((data.shape[1],), 0)
-    data = data.T[:, :, np.newaxis]
+    data = data[:, :, np.newaxis]
     id_mat = _expand2bool(id_train, (*data.shape[0: 2], DATASET_DEPTH))
     return data, id_mat
 

@@ -14,7 +14,7 @@ from keras import backend as K
 
 __all__ = ["create_model", "model_train", "model_test"]
 
-def _pearson_corr(y_true, y_pred, pool=True):
+def pearson_corr(y_true, y_pred, pool=True):
     """Calculates Pearson correlation as a metric.
     Args:
         y_true: true tensor with shape (batch_size, num_timesteps, 1)
@@ -70,7 +70,7 @@ def create_model():
     x = Activation('relu')(Conv1D(2, 5, padding='same')(x))
     output = Activation('sigmoid')(Conv1D(1, 5, padding='same')(x))
     model = Model(inputs=[main_input, dataset_input], outputs=output)
-    model.compile(loss=_pearson_corr, optimizer='adam')
+    model.compile(loss=pearson_corr, optimizer='adam')
     return model
 
 def model_train(model: Model, data_folder: str, target_folder: str) -> Model:
