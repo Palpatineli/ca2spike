@@ -1,74 +1,102 @@
-from typing import List
+from typing import Dict, List, Tuple
 import numpy as np
-from os.path import join
+from os.path import join, split
+from glob import iglob
 
-dataloc = '../data/'
-dataloc = '/opt/spikefinder/data/'
+DATASET_DEPTH = 10
 
-def prep_data(data: np.ndarray) -> np.ndarray:
-    return data
+Data = Dict[str, List[np.ndarray]]
 
-def find_files() -> List[str]:
-    path_fmt = join(dataloc, "spikefinder.train", "{data_id}.train.spikes.csv")
-    return [path_fmt.format(data_id=data_id + 1) for data_id in range(10)]
+__all__ = ["training_data", "testing_data", "prep_data", "prep_data_one"]
 
-def load_data(load_test=True):
-    calcium_train = []
-    spikes_train = []
-    ids = []
-    calcium_test = []
-    ids_test = []
-    for dataset in range(10):
-        calcium_train.append(np.genfromtxt(dataloc + 
-            'spikefinder.train/' + str(dataset+1) + 
-            '.train.calcium.csv'), delimiter=',')
-        spikes_train.append(np.array(pd.read_csv(dataloc + 
-            'spikefinder.train/' + str(dataset+1) + 
-            '.train.spikes.csv')))
-        ids.append(np.array([dataset]*calcium_train[-1].shape[1]))
-        if load_test and dataset < 5:
-            calcium_test.append(np.array(pd.read_csv(dataloc +
-                'spikefinder.test/' + str(dataset+1) +
-                '.test.calcium.csv')))
-            ids_test.append(np.array([dataset]*calcium_test[-1].shape[1]))
+def training_data(data_loc: str) -> Data:
+    data_list: Dict[str, list] = {"calcium": list(), "spikes": list()}
+    id_lists: Dict[str, list] = {"calcium": list(), "spikes": list()}
+    path_fmt = join(data_loc, "spikefinder.train", "*.train.{0}.csv")
+    for record_type in ("calcium", "spikes"):
+        for file_path in iglob(path_fmt.format(record_type)):
+            data_list[record_type].append(np.genfromtxt(file_path, delimiter=','))
+            file_basename = split(file_path)[-1]
+            id_lists[record_type].append(int(file_basename[0: file_basename.index('.')]) - 1)
+    # only take files where both calcium and spikes are available
+    id_list = sorted(set(id_lists["spikes"]) & set(id_lists["calcium"]))
+    for record_type in ("calcium", "spikes"):
+        data_list[record_type] = np.take(data_list[record_type], _search_ar(id_list, id_lists[record_type]))
+    data_list["id_train"] = [np.full((train.shape[1],), idx) for idx, train in zip(id_list, data_list["calcium"])]
+    return data_list
 
-    maxlen = max([c.shape[0] for c in calcium_train])
-    maxlen_test = max([c.shape[0] for c in calcium_test])
-    calcium_train_padded = \
-        np.hstack([np.pad(c, ((0, maxlen-c.shape[0]), (0, 0)),
-            'constant', constant_values=np.nan) for c in calcium_train])
-    spikes_train_padded = \
-        np.hstack([np.pad(c, ((0, maxlen-c.shape[0]), (0, 0)),
-            'constant', constant_values=np.nan) for c in spikes_train])
-    calcium_test_padded = \
-        np.hstack([np.pad(c, ((0, maxlen_test-c.shape[0]), (0, 0)),
-        'constant', constant_values=np.nan) for c in calcium_test])
-    ids_stacked = np.hstack(ids)
-    if load_test:
-        ids_test_stacked = np.hstack(ids_test)
+def testing_data(data_loc: str) -> Data:
+    path_fmt = join(data_loc, "spikefinder.test", "*.test.calcium.csv")
+    test_list: List[np.ndarray] = list()
+    id_list = list()
+    for file_path in iglob(path_fmt):
+        test_list.append(np.genfromtxt(file_path, delimiter=','))
+        file_basename = split(file_path)[-1]
+        id_list.append(int(file_basename[0: file_basename.index('.')]) - 1)
+    index = np.argsort(id_list)
+    id_list = np.take(id_list, index)
+    test_list = np.take(test_list, index)
+    return {"id_train": [np.full((test.shape[1],), idx) for idx, test in zip(id_list, test_list)],
+            "calcium": test_list}
+
+TRACE_FILL = {"spikes": -1, "calcium": 0}
+
+def prep_data(data: Data, focus_1st_n: int = 0) -> Dict[str, np.ndarray]:
+    """Prepare data for training or prediction.
+    Args:
+        data: read from csv files, with "calcium" and "id_train", optionally with "spikes"
+            "calcium" and "spikes" have cells in columns and samples in rows
+    """
+    result = {"id_train": np.hstack(data['id_train'])}
+    max_len = max([x.shape[0] for x in data["calcium"]])
+    for trace_type, fill in TRACE_FILL.items():
+        if trace_type not in data:
+            continue
+        result[trace_type] = np.hstack([np.pad(x, (0, max_len - x.shape[0]), (0, 0), "constant", constant_values=fill)
+                                        for x in data[trace_type]])
+    if "spikes" in result:
+        bad_spikes = result["spikes"] < -1
+        result["spikes"][np.logical_and(bad_spikes, np.isnan(result["spikes"]))] = TRACE_FILL["spikes"]
+        result["calcium"][np.logical_and(bad_spikes, np.isnan(result["calcium"]))] = TRACE_FILL["calcium"]
+        result["spikes"] = result["spikes"].T[:, :, np.newaxis]
     else:
-        ids_test_stacked = []
-    sample_weight = 1. + 1.5*(ids_stacked<5)
-    sample_weight /= sample_weight.mean()
-    calcium_train_padded[spikes_train_padded<-1] = np.nan
-    spikes_train_padded[spikes_train_padded<-1] = np.nan
+        result["calcium"][np.isnan(result["calcium"])] = TRACE_FILL["calcium"]
+    result["calcium"] = result["calcium"].T[:, :, np.newaxis]
+    result["id_mat"] = _expand2bool(result["id_train"], (*result["calcium"][0: 2], DATASET_DEPTH))
+    result["sample_weight"] = _sample_weight(result["id_train"], focus_1st_n) if focus_1st_n\
+        else np.full_like(result["id_train"], 1)
+    return result
 
-    calcium_train_padded[np.isnan(calcium_train_padded)] = 0.
-    spikes_train_padded[np.isnan(spikes_train_padded)] = -1.
+def prep_data_one(data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    data[np.isnan(data)] = TRACE_FILL["calcium"]
+    id_train = np.full((data.shape[1],), 0)
+    data = data.T[:, :, np.newaxis]
+    id_mat = _expand2bool(id_train, (*data.shape[0: 2], DATASET_DEPTH))
+    return data, id_mat
 
-    calcium_train_padded = calcium_train_padded.T[:, :, np.newaxis]
-    spikes_train_padded = spikes_train_padded.T[:, :, np.newaxis]
-    calcium_test_padded = calcium_test_padded.T[:, :, np.newaxis]
+def _expand2bool(data: np.ndarray, shape) -> np.ndarray:
+    """Convert a index array to a boolean mask.
+    This is a dimension specific version.
+    Args:
+        data: 1-d array with length N
+    Returns:
+        3-d matrix
+    """
+    result = np.zeros(shape, dtype=np.float_)
+    result[np.arange(data.size), :, data.ravel()] = 1.0
+    return result
 
-    ids_oneshot = np.zeros((calcium_train_padded.shape[0],
-        calcium_train_padded.shape[1], 10))
-    ids_oneshot_test = np.zeros((calcium_test_padded.shape[0],
-        calcium_test_padded.shape[1], 10))
-    for n,i in enumerate(ids_stacked):
-        ids_oneshot[n, :, i] = 1.
-    for n,i in enumerate(ids_test_stacked):
-        ids_oneshot_test[n, :, i] = 1.
+def _sample_weight(id_train: np.ndarray, test_set_n: int) -> float:
+    """Give higher weight to the first 5 training sets.
+    I have no idea why the authors did that.
+    """
+    sample_weight = 1.5 * (id_train < test_set_n) + 1.0
+    return sample_weight / sample_weight.mean()
 
-    return calcium_train, calcium_train_padded, spikes_train_padded,\
-            calcium_test_padded, ids_oneshot, ids_oneshot_test,\
-            ids_stacked, ids_test_stacked, sample_weight
+def _search_ar(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
+    """Find the locations of array1 elements in array2"""
+    arg2 = np.argsort(array2)
+    arg1 = np.argsort(array1)
+    rev_arg1 = np.argsort(arg1)
+    sorted2_to_sorted1 = np.searchsorted(array2[arg2], array1[arg1])
+    return arg2[sorted2_to_sorted1[rev_arg1]]

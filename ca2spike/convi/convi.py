@@ -1,7 +1,8 @@
 # this file is not type annotated because tensorflow doesn't document it
+from os.path import join
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
+from .utils import training_data, testing_data, prep_data
 
 from keras.models import Model
 from keras.layers.wrappers import Bidirectional
@@ -11,7 +12,9 @@ from keras.layers.convolutional import Conv1D
 from keras.callbacks import TensorBoard
 from keras import backend as K
 
-def pearson_corr(y_true, y_pred, pool=True):
+__all__ = ["create_model", "model_train", "model_test"]
+
+def _pearson_corr(y_true, y_pred, pool=True):
     """Calculates Pearson correlation as a metric.
     Args:
         y_true: true tensor with shape (batch_size, num_timesteps, 1)
@@ -47,7 +50,7 @@ def create_model():
     '''Create a mixed network.
     ca+ wave ---> conv * 2 + conv + LSTM + conv * 5 ---> sigmoid
                            ↑
-        static picture ----」
+        dataset labels ----」
     Dropout for layers 1, 2, 3, 5
     pearson correlation loss for the spike train
     '''
@@ -60,46 +63,36 @@ def create_model():
     x = Dropout(0.1)(Activation('relu')(Conv1D(10, 5, padding='same')(x)))
     z = Bidirectional(LSTM(10, return_sequences=True), merge_mode='concat', weights=None)(x)
     x = Concatenate()([x, z])
-    x = Conv1D(8, 5, padding='same')(x)
-    x = Activation('relu')(x)
+    x = Activation('relu')(Conv1D(8, 5, padding='same')(x))
     x = Dropout(0.1)(x)
-    x = Conv1D(4, 5, padding='same')(x)
-    x = Activation('relu')(x)
-    x = Conv1D(2, 5, padding='same')(x)
-    x = Activation('relu')(x)
-    x = Conv1D(2, 5, padding='same')(x)
-    x = Activation('relu')(x)
-    x = Conv1D(1, 5, padding='same')(x)
-    output = Activation('sigmoid')(x)
+    x = Activation('relu')(Conv1D(4, 5, padding='same')(x))
+    x = Activation('relu')(Conv1D(2, 5, padding='same')(x))
+    x = Activation('relu')(Conv1D(2, 5, padding='same')(x))
+    output = Activation('sigmoid')(Conv1D(1, 5, padding='same')(x))
     model = Model(inputs=[main_input, dataset_input], outputs=output)
-    model.compile(loss=pearson_corr, optimizer='adam')
+    model.compile(loss=_pearson_corr, optimizer='adam')
     return model
 
-
-def model_fit(model):
+def model_train(model: Model, data_folder: str, target_folder: str) -> Model:
     try:
         tf_board = TensorBoard(log_dir='./logtest2', histogram_freq=0, write_graph=True, write_images=True)
         block_callback = [tf_board]
     except ImportError:
         block_callback = []
-    model.fit([calcium_train_padded, ids_oneshot], spikes_train_padded, epochs=1,
-              batch_size=5, validation_split=0.2, sample_weight=sample_weight, callbacks=block_callback)
-    model.save_weights('model_convi_6')
+    params = prep_data(training_data(data_folder), 5)
+    model.fit([params["calcium"], params["id_mat"]], params["spikes"], epochs=1,
+              batch_size=5, validation_split=0.2, sample_weight=params["sample_weight"], callbacks=block_callback)
+    model.save_weights(join(target_folder, 'model-{}.h5'.format(K.backend())))
     return model
 
-def model_test(model):
-    pred_train = model.predict([calcium_train_padded, ids_oneshot])
-    pred_test = model.predict([calcium_test_padded, ids_oneshot_test])
+def model_test(model: Model, data_folder: str) -> np.ndarray:
+    data = testing_data(data_folder)
+    preped_data = prep_data(data)
+    pred_test = model.predict([preped_data["calcium"], preped_data["id_mat"]])
+    for data_id in range(5):
+        pred_test[prep_data["id_train"] == data_id, 0: data["calcium"][data_id].shape[0]].squeeze()
 
-    for dataset in range(10):
-        pd.DataFrame(pred_train[ids_stacked == dataset, 0: calcium_train[dataset].shape[0]].squeeze().T).\
-            to_csv(dataloc + 'predict_6/' + str(dataset + 1) + '.train.spikes.csv', sep=',', index=False)
-        if dataset < 5:
-            pd.DataFrame(pred_test[ids_test_stacked == dataset, 0: calcium_test[dataset].shape[0]].squeeze().T).\
-                to_csv(dataloc + 'predict_6/' + str(dataset + 1) + '.test.spikes.csv', sep=',', index=False)
-
-
-def plot_kernels(model, layer=0):
+def plot_kernels(model: Model, layer: int = 0):
     srate = 100.
     weights = model.get_weights()[layer]
     t = np.arange(-weights.shape[0] / srate / 2, weights.shape[0] / srate / 2, 1. / srate)
@@ -109,11 +102,3 @@ def plot_kernels(model, layer=0):
     plt.ylabel('Kernel amplitudes')
     plt.title('Convolutional kernels of the input layer')
     plt.show()
-
-if __name__ == '__main__':
-    calcium_train, calcium_train_padded, spikes_train_padded, calcium_test_padded, ids_oneshot, ids_oneshot_test,\
-        ids_stacked, ids_test_stacked, sample_weight = load_data()
-
-    model = create_model()
-    # model = model_fit(model)
-    # model_test(model)
